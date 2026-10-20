@@ -9,7 +9,7 @@
 ## 1. Strategy philosophy
 
 1. **No single strategy works in all markets.** The bot runs a small *portfolio* of uncorrelated strategies and a **regime filter** decides which ones may trade.
-2. **Survive first, profit second.** Every position has an exchange-side stop from the moment it opens. Risk is sized from the stop distance, never from the target.
+2. **Fully invested, never over-leveraged.** 100% of the fund is put to work at controlled leverage (default 1×). Every position has an exchange-side stop from the moment it opens.
 3. **The target controls risk downwards only.** When behind target the bot trades normally. When ahead it trades smaller. It never doubles up.
 4. **Maker-first execution.** Post-only orders avoid paying the spread; taker orders are used only when a signal is about to be missed.
 5. **The weekly target is set from the data.** It is calibrated from walk-forward results (§8.5), not chosen first and forced onto the market.
@@ -67,7 +67,7 @@ This runs per market on closed **1h bars**. Its output is one of four regimes, w
 | Trailing exit | Chandelier stop at 3.0 × ATR from the highest high (long) or lowest low (short), updated on bar close |
 | Time stop | Exit if the trade is still under +0.5R after 48 bars |
 | Re-entry | None in the same direction until a new Donchian breakout |
-| Base risk | **0.50% of equity** per trade (core markets); 0.25% for SOL |
+| Size | Full-deployment allocation (§5). At 1×, a stopped trade costs ≈ 1–2% of equity |
 
 Expected profile: win rate around 35–45%, average win much larger than average loss, and long losing streaks. This is normal for trend strategies.
 
@@ -83,7 +83,7 @@ Expected profile: win rate around 35–45%, average win much larger than average
 | Stop | z = −4.0 or 1.5 × ATR(14, 15m) beyond the last ladder level, whichever is closer |
 | Time stop | 16 bars (4 hours) |
 | Kill condition | Regime leaves RANGE → cancel unfilled ladder orders and exit at breakeven or better within 2 bars, otherwise at market |
-| Base risk | **0.30% of equity** per trade (whole ladder combined) |
+| Size | Full-deployment allocation (§5); the 3 ladder orders together equal the full allocation |
 
 Expected profile: win rate around 60–70%, small average wins, and losses capped by the stop and the regime kill.
 
@@ -91,29 +91,45 @@ Expected profile: win rate around 60–70%, small average wins, and losses cappe
 
 Lighter pays funding **hourly** (confirm in the docs at build time).
 
-- When a market's 8h average funding is extreme (annualised > ±30%), the side that **receives** funding gets **+20% size** and the side that pays gets **−50% size**.
+- When a market's 8h average funding is extreme (annualised > ±30%), the side that **pays** funding gets **−50% size**. In full-deployment mode there is no headroom to increase the receiving side.
 - Logged as its own PnL component so we can measure whether it adds value.
 - A full delta-neutral funding-arbitrage strategy (Lighter against a hedge venue) is deferred to Phase 3.
 
 ---
 
-## 5. Layer 3 — Portfolio construction & position sizing
+## 5. Layer 3 — Capital deployment & position sizing (FULL DEPLOYMENT MODE)
+
+**Owner decision:** the bot uses **100% of the fund**. That means the whole sub-account balance is put to work, not only a small "risk slice" per trade.
+
+"100% of the fund" is interpreted as **100% of equity deployed as position notional at controlled leverage**. It does **not** mean posting 100% of equity as margin at high leverage. The difference:
+
+| Leverage on the full fund | Loss per stopped trade (≈2% stop) | Drawdown after a normal 8-loss streak | Adverse move that liquidates (approx.) |
+|---|---|---|---|
+| **1× (default)** | ≈ 2% | ≈ 15% | none in practice (longs ≈ −100%) |
+| 2× (hard cap) | ≈ 4% | ≈ 28% | ≈ −45% |
+| 3× | ≈ 6% | ≈ 39% | ≈ −30% |
+| 5× | ≈ 10% | ≈ 57% | ≈ −17% |
+| 10× | ≈ 20% | ≈ 83% | ≈ −7% (BTC has moved this much in hours) |
+
+Losing streaks of 6–8 trades are normal for a trend strategy that wins 35–45% of its trades. Liquidation levels are approximate; they depend on each market's maintenance margin. A stop-loss can slip past its price during a crash, so liquidation distance is the last line of defence.
+
+### Allocation formula
 
 ```
-qty = (equity × base_risk × regime_ok × target_multiplier × funding_tilt × vol_scaler)
-      ───────────────────────────────────────────────────────────────────────────────
-                               |entry − stop| × contract_size
+deployable  = equity × L × m × vol_scaler          # L = leverage (default 1.0, hard cap 2.0)
+                                                   # m = Target Engine multiplier (≤ 1)
+                                                   # vol_scaler ∈ [0.5, 1.0] (can only reduce)
+w_i         = market weight (BTC 1.0, ETH 1.0, SOL 0.5)
+notional_i  = deployable × w_i / Σ w_active        # split across currently active signals
+            capped at: BTC/ETH 100%, SOL 50% of deployable
 ```
 
-| Control | Value |
-|---|---|
-| `vol_scaler` | Targets **20% annualised portfolio volatility**, clamped to [0.5, 1.25] |
-| Max effective leverage | **3×** total notional / equity |
-| Correlated exposure cap | BTC, ETH and SOL are highly correlated, so the sum of open risk **in the same direction ≤ 1.25% of equity** |
-| Max open positions | 4 in total, at most 1 per strategy per market |
-| Margin mode | **Isolated** per position: a bad trade cannot drain the whole account |
-| Exchange leverage setting | 5× max per market, giving headroom between our stop and the liquidation price |
-| Liquidation buffer | Stop must sit ≥ 3 × ATR closer than the liquidation price, otherwise the size is reduced |
+- **One signal active** → that position takes the full deployable amount (subject to the market cap).
+- **New signal while capital is fully used** → existing positions are trimmed (reduce-only orders) to their new share. Trims happen only if the change is more than 10%, so we don't churn.
+- **No signal / CHAOS regime** → the capital sits in USDC as collateral. Being 100% deployed means *available for* signals; the bot never forces a trade just to be invested.
+- **Correlation guard:** BTC, ETH and SOL move together. If all three signal in the same direction, total notional is still capped at `deployable`, so we never stack 3× exposure.
+- **Margin:** cross margin on the bot sub-account, with exchange leverage set to 3× per market. This leaves headroom above our 1–2× effective use, so a temporary price spike cannot trigger liquidation.
+- **Liquidation guard:** the risk manager rejects any order that would leave the liquidation price closer than 3 × the stop distance.
 
 ---
 
@@ -126,13 +142,15 @@ Inputs:
 - `pnl`: realised + unrealised PnL this week
 - `t`: fraction of the week elapsed, from 0 to 1
 
+`m` = **fraction of the fund the bot may deploy**. 1.0 = 100%.
+
 ```
 progress p = pnl / (T × E₀)
 
 target_multiplier m:
   pnl ≤ −L × E₀               → 0     HALT for the week (manual resume only)
   pnl ≤ −0.5 L × E₀           → 0.5   defensive
-  day PnL ≤ −1% E₀            → 0     pause until next day 00:00 IST
+  day PnL ≤ −4% E₀            → 0     pause until next day 00:00 IST
   p ≥ 1.0 (target hit)        → 0.25  "house-money mode" with profit floor = 0.8 T
       └ pnl falls to floor    → 0     LOCKED for the rest of the week
   p ≥ t + 0.30 (well ahead)   → 0.6
@@ -141,7 +159,7 @@ target_multiplier m:
 
 - When the target is hit, open trades keep their stops, which also tighten to a maximum of 1.5 × ATR.
 - **House-money mode** lets winning weeks run past the target while guaranteeing at least 80% of the target is kept.
-- Default parameters: `T` is calibrated in §8.5, `L` = 3%, daily stop = 1%.
+- Default parameters (full deployment at 1×): `T` is calibrated in §8.5, `L` = 10%, daily stop = 4%. These are re-derived from the Monte-Carlo drawdowns in §8.3.
 
 ### Optional · Volume Target Module (S4 Maker Engine)
 
@@ -152,7 +170,7 @@ Used only if the weekly goal is **traded volume** (points or tier). It is strong
 | Quoting | Two-sided post-only quotes around the micro-price |
 | Spread | max(2 ticks, k × 1-min realised vol) |
 | Inventory skew | Quotes shift against inventory: skew = −γ × inventory / max_inventory |
-| Inventory cap | ±0.5% equity notional; above the cap, quotes go on the reducing side only |
+| Inventory cap | ±25% of deployable capital; above the cap, quotes go on the reducing side only |
 | Toxicity guard | Pause 30 s when trade-flow imbalance > 70% over 10 s or price moves > 0.3 × 1-min ATR |
 | Pacing | hourly volume budget = remaining volume / remaining hours; when ahead of budget, quoting slows down |
 | Cost cap | Net cost per $1M volume (fees + adverse selection) ≤ configured maximum, else the module pauses |
@@ -195,7 +213,7 @@ Fees by tier (Standard 0%; Premium per the fee table) · slippage = half the spr
 |---|---|
 | Profit factor | ≥ 1.3 |
 | Sharpe (annualised) | ≥ 1.0 |
-| Max drawdown | ≤ 15% |
+| Max drawdown (at 1× full deployment) | ≤ 20% |
 | Positive weeks | ≥ 55% |
 | Correlation between S1 and S2 returns | ≤ 0.3 |
 
@@ -203,7 +221,7 @@ Fees by tier (Standard 0%; Premium per the fee table) · slippage = half the spr
 `T` = the **median out-of-sample weekly return** of the combined portfolio × 0.8 (a safety haircut). A target above this level would push the system towards over-trading, so the Target Engine config rejects it.
 
 ### 8.6 Go-live ladder
-Backtest gates → **2 weeks paper/testnet running 24x7** → live at **10% of capital** for 2–4 weeks → scale in steps of +25%, and only if live results stay within the backtest's 95% bands.
+Backtest gates → **2 weeks paper/testnet running 24x7** (costs no money) → **3-day live smoke test at the exchange's minimum order size** (proves signing, stops and reconciliation with real funds) → **100% of the fund at 1×**. Moving to 2× requires 4+ live weeks within the backtest's 95% bands.
 
 ### 8.7 Live kill criteria (per strategy)
 - Drawdown > 1.5 × the Monte-Carlo 95th-percentile drawdown → strategy disabled, owner alerted
@@ -234,7 +252,6 @@ s1_trend:
   chandelier_atr: 3.0
   partial_tp_r: 2.0
   time_stop_bars: 48
-  base_risk: 0.005
 
 s2_meanrev:
   vwap_bars: 16
@@ -242,19 +259,22 @@ s2_meanrev:
   ladder: [0.4, 0.3, 0.3]
   z_stop: -4.0
   time_stop_bars: 16
-  base_risk: 0.003
 
-portfolio:
-  target_vol_annual: 0.20
-  max_leverage: 3.0
-  max_same_dir_risk: 0.0125
-  margin_mode: isolated
+capital:
+  deployment: full          # 100% of the fund
+  leverage: 1.0             # effective leverage on the full fund
+  leverage_hard_cap: 2.0    # config validation rejects anything higher
+  exchange_leverage: 3.0    # per-market setting = liquidation headroom
+  vol_scaler_range: [0.5, 1.0]
+  market_caps: { BTC: 1.0, ETH: 1.0, SOL: 0.5 }
+  rebalance_threshold: 0.10
+  margin_mode: cross
 
 target:
   mode: pnl             # pnl | volume | both
   weekly_target_pct: auto   # from §8.5 calibration
-  weekly_loss_limit_pct: 3.0
-  daily_loss_limit_pct: 1.0
+  weekly_loss_limit_pct: 10.0
+  daily_loss_limit_pct: 4.0
   house_money_floor: 0.8
   week_start: "MON 00:00 Asia/Kolkata"
 ```

@@ -18,8 +18,8 @@ The bot supports two target modes **[DECIDE which one, or both]**:
 ### Target Engine rules (non-negotiable)
 1. **Asymmetric pacing** — when *ahead* of pace, risk is **reduced**; when *behind*, risk stays at the **base level, never above it**.
 2. **Lock-in** — once the weekly PnL target is hit, the bot switches to *protect mode* (flat or minimum size) until the week resets.
-3. **Weekly loss limit** (e.g. −3% equity) → hard stop until next week + human sign-off to resume.
-4. **Daily loss limit** (e.g. −1%) → pause for the rest of the UTC/IST day.
+3. **Weekly loss limit** (default −10% equity, full-deployment mode) → hard stop until next week + human sign-off to resume.
+4. **Daily loss limit** (default −4%) → pause for the rest of the UTC/IST day.
 5. Volume mode: hourly volume budget = remaining volume ÷ remaining hours, with a **max cost per $1M volume** cap; if cost exceeds cap, the bot slows down instead of crossing the spread.
 
 Week boundary: Monday 00:00 IST (configurable).
@@ -95,8 +95,8 @@ Each strategy is a plug-in implementing one interface (`on_bar`, `on_book`, `on_
 2. **Account Service** — positions, balances, margin, open orders from WS; **REST reconciliation every 30–60 s** and on every reconnect (source of truth = exchange).
 3. **Execution / OMS** — signing via SDK, nonce manager, token-bucket rate limiter matching the account tier, client order IDs for idempotency, order state machine (`NEW → ACK → PARTIAL → FILLED/CANCELLED/REJECTED`), retry with backoff only for safe errors.
 4. **Risk Manager** — every order passes these gates:
-   - max leverage (start 2–3x), max notional per market & total
-   - risk per trade 0.25–0.5% of equity (position sized from stop distance)
+   - **full deployment**: 100% of the fund is allocated across open positions at the configured leverage (default 1×, hard cap 2×) — see STRATEGY_PLAN §5
+   - max notional per market & total
    - liquidation buffer (distance to liq price ≥ X× ATR)
    - price-band check vs. mark/index (fat-finger protection)
    - max orders/min, max consecutive losses → cool-down
@@ -172,7 +172,7 @@ docs/
 | **1. Foundation** | 2 | Lighter client wrapper, WS data, OMS, nonce/rate limiter, data recorder, Telegram status — on **testnet** | 72 h continuous testnet run, zero orphan orders, clean reconciliations |
 | **2. Research & backtest** | 2–3 | Backtester, S1–S3 implemented, walk-forward tests on 1–2 yrs of data incl. fees/slippage/funding | Positive expectancy out-of-sample; max DD within limits; no curve-fitting red flags |
 | **3. Risk + Target engine + paper** | 2 | Risk manager, target/pacing engine, kill switch, exchange-side stops, Grafana | 2 weeks paper/testnet 24x7; all failure drills passed (kill WS, kill process, network cut) |
-| **4. Mainnet pilot** | 2–4 | Live with **small capital** (e.g. 5–10% of planned size) | Live results within tolerance of paper; no operational incidents |
+| **4. Mainnet pilot** | 2–4 | Live with **100% of the fund at 1×** after a 3-day live smoke test at minimum order size | Live results within tolerance of paper; no operational incidents |
 | **5. Scale & extend** | ongoing | Scale capital stepwise, S4 maker (Premium), S5 funding, dashboard | Monthly review gates |
 
 ### Failure drills before going live
@@ -189,7 +189,7 @@ Sent automatically every Monday: PnL (abs & %), vs. target, volume, fees paid, f
 ## 9. Open questions **[DECIDE]**
 
 1. Target type: **volume**, **profit %**, or both? What number per week?
-2. Starting capital on the bot sub-account and maximum acceptable weekly loss?
+2. ~~Capital~~ → **100% of the fund (decided)**. Confirm leverage on the full fund: 1× (recommended) or 2× max?
 3. Account tier: Standard (zero fee, slow) or Premium (fees, fast)?
 4. Markets: BTC/ETH only to start, or include SOL/others?
 5. Hosting preference (AWS / GCP / Hetzner) and who receives alerts?
