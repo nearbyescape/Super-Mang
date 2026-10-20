@@ -48,7 +48,7 @@ Week boundary: Monday 00:00 IST (configurable).
 
 ---
 
-## 2. Strategy plan
+## 2. Strategy plan (full spec: [STRATEGY_PLAN.md](./STRATEGY_PLAN.md))
 
 We start with **simple, testable, low-frequency** strategies and only add complexity when data proves it pays.
 
@@ -104,7 +104,7 @@ Each strategy is a plug-in implementing one interface (`on_bar`, `on_book`, `on_
    - **Exchange-side reduce-only stop-loss on every position**, so positions stay protected even if the bot dies
 5. **Target / Pacing Engine** — section 0 logic; outputs a *risk multiplier* in `[0, 1]` (never > 1).
 6. **Supervisor / Watchdog** — heartbeat, auto-restart, on fatal error: cancel all → (optionally) flatten → alert. Manual **kill switch** via Telegram `/kill` and dashboard.
-7. **Persistence** — every signal, order, fill, and config change is stored (audit trail + analytics + tax reporting).
+7. **Persistence** — every signal, order, fill, and config change is stored (audit trail + analytics).
 8. **Ops & UI** — Grafana (equity curve, PnL vs. target, latency, error rates), Telegram (`/status`, `/pause`, `/resume`, `/kill`, `/target`), web dashboard later.
 
 ---
@@ -186,14 +186,7 @@ Sent automatically every Monday: PnL (abs & %), vs. target, volume, fees paid, f
 
 ---
 
-## 9. Compliance & tax (India) — owner to confirm with a CA
-
-- Check Lighter's Terms of Service for restricted jurisdictions before funding.
-- Indian VDA rules: flat 30% tax on gains, 1% TDS on transfers, losses not set off — derivatives on offshore platforms may have additional reporting implications. The bot's audit trail (section 3.7) is designed to support reporting.
-
----
-
-## 10. Open questions **[DECIDE]**
+## 9. Open questions **[DECIDE]**
 
 1. Target type: **volume**, **profit %**, or both? What number per week?
 2. Starting capital on the bot sub-account and maximum acceptable weekly loss?
